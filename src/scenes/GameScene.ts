@@ -13,7 +13,6 @@ import { CropType, CROP_DEFS, CropRole } from '../data/crops';
 import { GamePhase, GameState } from '../systems/types';
 import { chainDelay } from '../utils/animations';
 import { floatTextUp, flashCell, shakeCamera, bobUpDown, pulseAlpha } from '../utils/animations';
-import { Point } from '../utils/pathfinder';
 
 export class GameScene extends Phaser.Scene {
   // Systems
@@ -49,12 +48,30 @@ export class GameScene extends Phaser.Scene {
 
   // Status bar at bottom
   statusText!: Phaser.GameObjects.Text;
+  guidePanel: Phaser.GameObjects.Container | null = null;
 
   constructor() {
     super({ key: 'GameScene' });
   }
 
   create(): void {
+    // Reset all state
+    this.state = {
+      turn: 1,
+      gold: 10,
+      energy: 3,
+      phase: 'planning',
+      totalChains: 0,
+      totalGoldEarned: 0,
+      totalDiseasesCleared: 0,
+    };
+    this.cellSprites = [];
+    this.cellIcons = [];
+    this.cellDiseaseBgs = [];
+    this.nutrientParticles = [];
+    this.validPlacements = [];
+    this.guidePanel = null;
+
     this.grid = new GridSystem();
     this.chainEngine = new ChainEngine(this.grid);
     this.diseaseAI = new DiseaseAI();
@@ -117,6 +134,47 @@ export class GameScene extends Phaser.Scene {
       }
     };
 
+    // ─── Guide Button ───
+    const guideBtnX = GRID_OFFSET_X + GRID_SIZE * CELL_SIZE - 10;
+    const guideBtnY = GRID_OFFSET_Y - 25;
+    const guideBg = this.add.rectangle(guideBtnX, guideBtnY, 70, 24, 0x2a4a1e, 0.9);
+    guideBg.setStrokeStyle(1, COLORS.GOLD);
+    guideBg.setDepth(30);
+    guideBg.setInteractive({ useHandCursor: true });
+    const guideLabel = this.add.text(guideBtnX, guideBtnY, '📖 攻略', {
+      fontSize: '12px',
+      fontFamily: 'Courier New, monospace',
+      color: '#ffd700',
+    });
+    guideLabel.setOrigin(0.5);
+    guideLabel.setDepth(31);
+    guideBg.on('pointerover', () => guideBg.setFillStyle(0x3a5a2e));
+    guideBg.on('pointerout', () => guideBg.setFillStyle(0x2a4a1e));
+    guideBg.on('pointerdown', () => this.toggleGuide());
+
+    // ─── GM Gold Button ───
+    const gmBtnX = guideBtnX - 90;
+    const gmBtnY = guideBtnY;
+    const gmBg = this.add.rectangle(gmBtnX, gmBtnY, 70, 24, 0x4a2020, 0.9);
+    gmBg.setStrokeStyle(1, 0xff6666);
+    gmBg.setDepth(30);
+    gmBg.setInteractive({ useHandCursor: true });
+    const gmLabel = this.add.text(gmBtnX, gmBtnY, '💰 +50', {
+      fontSize: '12px',
+      fontFamily: 'Courier New, monospace',
+      color: '#ff9999',
+    });
+    gmLabel.setOrigin(0.5);
+    gmLabel.setDepth(31);
+    gmBg.on('pointerover', () => gmBg.setFillStyle(0x5a3030));
+    gmBg.on('pointerout', () => gmBg.setFillStyle(0x4a2020));
+    gmBg.on('pointerdown', () => {
+      this.state.gold += 50;
+      this.updateUI();
+      const cx = GRID_OFFSET_X + (GRID_SIZE * CELL_SIZE) / 2;
+      floatTextUp(this, cx, 50, '+50 💰 (GM)', '#ffd700', 20);
+    });
+
     // Status bar
     const statusY = GRID_OFFSET_Y + GRID_SIZE * CELL_SIZE + 20;
     const statusX = GRID_OFFSET_X;
@@ -142,6 +200,82 @@ export class GameScene extends Phaser.Scene {
     ).setDepth(30);
   }
 
+  // ─── Guide Panel ─────────────────────────────────────
+  private toggleGuide(): void {
+    if (this.guidePanel) {
+      this.guidePanel.destroy();
+      this.guidePanel = null;
+      return;
+    }
+
+    const cx = GRID_OFFSET_X + (GRID_SIZE * CELL_SIZE) / 2;
+    const cy = GRID_OFFSET_Y + (GRID_SIZE * CELL_SIZE) / 2;
+    const panelW = 440;
+    const panelH = 400;
+
+    this.guidePanel = this.add.container(cx, cy);
+    this.guidePanel.setDepth(100);
+
+    // Overlay
+    const overlay = this.add.rectangle(0, 0, 800, 600, 0x000000, 0.5);
+    overlay.setInteractive();
+    overlay.on('pointerdown', () => this.toggleGuide());
+    this.guidePanel.add(overlay);
+
+    // Panel bg
+    const bg = this.add.rectangle(0, 0, panelW, panelH, 0x1a1208, 0.95);
+    bg.setStrokeStyle(2, COLORS.GOLD);
+    this.guidePanel.add(bg);
+
+    // Close button
+    const closeBtn = this.add.text(panelW / 2 - 20, -panelH / 2 + 15, '✕', {
+      fontSize: '18px',
+      color: '#ff6666',
+    });
+    closeBtn.setInteractive({ useHandCursor: true });
+    closeBtn.on('pointerdown', () => this.toggleGuide());
+    this.guidePanel.add(closeBtn);
+
+    const guideContent = [
+      { title: '🌾 生态多米诺 — 游玩攻略', style: { fontSize: '18px', color: '#c9a227' } },
+      { title: '', style: { fontSize: '6px', color: '#000' } },
+      { title: '🎯 核心目标', style: { fontSize: '14px', color: '#00d4ff' } },
+      { title: '放置作物形成连锁路径，将入侵的真菌转化为金币！', style: { fontSize: '12px', color: '#f5e6c8' } },
+      { title: '', style: { fontSize: '6px', color: '#000' } },
+      { title: '🌿 作物三阶段', style: { fontSize: '14px', color: '#00d4ff' } },
+      { title: '① 触发器（捕蝇草）→ 吞噬病害，产出养分', style: { fontSize: '11px', color: '#f5e6c8' } },
+      { title: '② 放大器（向日葵）→ 接收养分，放大并传递', style: { fontSize: '11px', color: '#f5e6c8' } },
+      { title: '③ 终结器（南瓜）→ 吸收养分，爆炸产出大量金币', style: { fontSize: '11px', color: '#f5e6c8' } },
+      { title: '', style: { fontSize: '6px', color: '#000' } },
+      { title: '⚡ 连锁 = 金币', style: { fontSize: '14px', color: '#00d4ff' } },
+      { title: '连锁越长，金币越多（指数增长！）', style: { fontSize: '11px', color: '#f5e6c8' } },
+      { title: '例：3步连锁=6金 | 5步连锁=15金 | 7步连锁=28金', style: { fontSize: '11px', color: '#ffd700' } },
+      { title: '', style: { fontSize: '6px', color: '#000' } },
+      { title: '🦠 关于病害', style: { fontSize: '14px', color: '#00d4ff' } },
+      { title: '• 真菌每回合向相邻格子扩散1格', style: { fontSize: '11px', color: '#f5e6c8' } },
+      { title: '• 两个真菌相遇会合并成超级真菌（扩散更快，但收益×3！）', style: { fontSize: '11px', color: '#f5e6c8' } },
+      { title: '• 病害覆盖超过60%格子则游戏结束', style: { fontSize: '11px', color: '#f5e6c8' } },
+      { title: '', style: { fontSize: '6px', color: '#000' } },
+      { title: '💡 策略技巧', style: { fontSize: '14px', color: '#00d4ff' } },
+      { title: '• 提前规划路径：先放触发器在前线，后方摆放大器和终结器', style: { fontSize: '11px', color: '#f5e6c8' } },
+      { title: '• 南瓜需要2+养分才能爆炸，配合多个向日葵喂它', style: { fontSize: '11px', color: '#f5e6c8' } },
+      { title: '• 作物激活后开始消耗寿命，死亡前完成连锁！', style: { fontSize: '11px', color: '#f5e6c8' } },
+      { title: '• 不要急着杀病害——养大了再杀，收益更高', style: { fontSize: '11px', color: '#ffd700' } },
+    ];
+
+    let ty = -panelH / 2 + 30;
+    for (const line of guideContent) {
+      const t = this.add.text(-panelW / 2 + 25, ty, line.title, {
+        ...line.style,
+        fontFamily: 'Courier New, monospace',
+        stroke: '#000',
+        strokeThickness: 1,
+      });
+      this.guidePanel.add(t);
+      ty += parseInt(line.style.fontSize) + 6;
+    }
+  }
+
   private setupInput(): void {
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       const cell = pixelToCell(pointer.x, pointer.y);
@@ -158,6 +292,8 @@ export class GameScene extends Phaser.Scene {
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (this.state.phase !== 'planning') return;
+      // Don't handle clicks if guide is open
+      if (this.guidePanel) return;
       if (pointer.rightButtonDown()) {
         this.cropBar.selectCrop(null);
         this.hideValidPlacements();
@@ -563,7 +699,9 @@ export class GameScene extends Phaser.Scene {
     restart.setDepth(81);
     restart.setInteractive({ useHandCursor: true });
     restart.on('pointerdown', () => {
-      this.scene.restart();
+      // Full scene restart with proper cleanup
+      this.scene.stop('GameScene');
+      this.scene.start('GameScene');
     });
   }
 }
